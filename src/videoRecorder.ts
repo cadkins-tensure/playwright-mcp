@@ -17,10 +17,8 @@
 import fs from 'fs';
 import path from 'path';
 import { spawn } from 'child_process';
-import { promisify } from 'util';
 import https from 'https';
 import { createWriteStream } from 'fs';
-import { execFile } from 'child_process';
 import extract from 'extract-zip';
 
 import * as playwright from 'playwright';
@@ -63,10 +61,8 @@ export class VideoRecorder {
   }
 
   static async create(config: FullConfig, rootPath: string | undefined): Promise<VideoRecorder | null> {
-
     if (!config.videoRecording?.enabled)
       return null;
-
 
     // Create base output directory - session folders will be created in startRecording
     const outputDir = await outputFile(config, rootPath, 'video-sessions');
@@ -81,16 +77,16 @@ export class VideoRecorder {
       ...config.videoRecording.options,
     };
 
-
     const recorder = new VideoRecorder(config, options, outputDir);
     return recorder;
   }
 
   async startRecording(context: Context): Promise<void> {
-
     if (this._isRecording)
       return;
 
+    // Ensure FFmpeg is available before starting recording
+    await this._ensureFFmpegAvailable();
 
     // Create unique session folder for this recording
     const sessionNumber = ++VideoRecorder._sessionCounter;
@@ -99,96 +95,211 @@ export class VideoRecorder {
     this._screenshotsDir = path.join(sessionDir, 'screenshots');
     this._videoFile = path.join(sessionDir, `recording-${this._sessionId}.${this._options.format}`);
 
+    await fs.promises.mkdir(this._screenshotsDir, { recursive: true });
 
     this._context = context;
     this._isRecording = true;
     this._screenshotCount = 0;
 
-    // Create session directory and screenshots subdirectory
-    await fs.promises.mkdir(sessionDir, { recursive: true });
-    await fs.promises.mkdir(this._screenshotsDir, { recursive: true });
-
-    // Ensure FFmpeg is available
-    await this._ensureFFmpeg();
-
-    // Wait a bit for the page to be ready
-    await new Promise(resolve => setTimeout(resolve, 500));
-
-    // Start screenshot capture
-    this._screenshotInterval = setInterval(async () => {
-      await this._captureScreenshot();
+    // Start capturing screenshots at regular intervals
+    this._screenshotInterval = setInterval(() => {
+      void this._captureScreenshot();
     }, this._options.screenshotInterval);
-
-    // Capture initial screenshot immediately
-    await this._captureScreenshot();
-
   }
 
-  async stopRecording(): Promise<string | null> {
+  async stopRecording(): Promise<string> {
     if (!this._isRecording)
-      return null;
-
+      throw new Error('No active recording to stop');
 
     this._isRecording = false;
 
-    // Stop screenshot capture
     if (this._screenshotInterval) {
       clearInterval(this._screenshotInterval);
       this._screenshotInterval = null;
     }
 
-    // Wait a bit for any pending screenshots
-    await new Promise(resolve => setTimeout(resolve, 1000));
-
     // Generate video from screenshots
     const videoPath = await this._generateVideo();
 
-    // Clean up screenshots after video generation
-    await this._cleanupScreenshots();
-
-    // Reset session for next recording
-
+    // Reset session data
     this._sessionId = null;
     this._screenshotsDir = '';
     this._videoFile = '';
-
+    this._context = null;
 
     return videoPath;
   }
 
-  /**
-   * Trigger an immediate screenshot capture (for tab switching)
-   */
-  async triggerScreenshot(): Promise<void> {
-    await this._captureScreenshot();
-  }
-
-  private async _ensureFFmpeg(): Promise<void> {
-    if (this._ffmpegPath)
+  async pauseRecording(): Promise<void> {
+    if (!this._isRecording)
       return;
 
+    if (this._screenshotInterval) {
+      clearInterval(this._screenshotInterval);
+      this._screenshotInterval = null;
+    }
+  }
 
-    // Try to find system FFmpeg first
-    try {
-      const { stdout } = await promisify(execFile)('ffmpeg', ['-version'], { timeout: 5000 });
-      if (stdout.includes('ffmpeg version')) {
-        this._ffmpegPath = 'ffmpeg';
-        return;
-      }
-    } catch (error) {
-      // System FFmpeg not found, download our own
+  async resumeRecording(): Promise<void> {
+    if (!this._isRecording || this._screenshotInterval)
+      return;
+
+    this._screenshotInterval = setInterval(() => {
+      void this._captureScreenshot();
+    }, this._options.screenshotInterval);
+  }
+
+  public triggerScreenshot(): void {
+    if (this._isRecording) {
+      void this._captureScreenshot();
+    }
+  }
+
+  private async _ensureFFmpegAvailable(): Promise<void> {
+    if (this._ffmpegPath) {
+      return; // Already resolved
     }
 
-    // Download FFmpeg binary
-    this._ffmpegPath = await this._downloadFFmpeg();
+    // 1. Check environment variable first (highest priority)
+    const envFFmpegPath = process.env.FFMPEG_PATH || process.env.FFMPEG_BINARY;
+    if (envFFmpegPath) {
+      try {
+        await fs.promises.access(envFFmpegPath, fs.constants.X_OK);
+        this._ffmpegPath = envFFmpegPath;
+        return;
+      } catch (error) {
+        throw new Error(`FFmpeg path from environment variable is not executable: ${envFFmpegPath}\nPlease check your FFMPEG_PATH or FFMPEG_BINARY environment variable.`);
+      }
+    }
+
+    // 2. Auto-detect FFmpeg in system PATH
+    const systemFFmpegPath = await this._findFFmpegInPath();
+    if (systemFFmpegPath) {
+      this._ffmpegPath = systemFFmpegPath;
+      return;
+    }
+
+    // 3. Auto-download FFmpeg (fallback)
+    try {
+      this._ffmpegPath = await this._downloadFFmpeg();
+      return;
+    } catch (error) {
+      const errorMessage = this._getFFmpegInstallationInstructions();
+      throw new Error(`FFmpeg is required for video recording but could not be found or downloaded.\n\n${errorMessage}`);
+    }
+  }
+
+  private async _findFFmpegInPath(): Promise<string | null> {
+    const platform = process.platform;
+    const binaryName = platform === 'win32' ? 'ffmpeg.exe' : 'ffmpeg';
+
+    // Check common PATH locations
+    const pathDirs = process.env.PATH?.split(path.delimiter) || [];
+    
+    for (const dir of pathDirs) {
+      try {
+        const ffmpegPath = path.join(dir, binaryName);
+        await fs.promises.access(ffmpegPath, fs.constants.X_OK);
+        return ffmpegPath;
+      } catch (error) {
+        // Continue to next directory
+      }
+    }
+
+    // Also check common installation locations
+    const commonPaths = this._getCommonFFmpegPaths();
+    for (const commonPath of commonPaths) {
+      try {
+        await fs.promises.access(commonPath, fs.constants.X_OK);
+        return commonPath;
+      } catch (error) {
+        // Continue to next path
+      }
+    }
+
+    return null;
+  }
+
+  private _getCommonFFmpegPaths(): string[] {
+    const platform = process.platform;
+    const binaryName = platform === 'win32' ? 'ffmpeg.exe' : 'ffmpeg';
+    const paths: string[] = [];
+
+    if (platform === 'darwin') {
+      // macOS common locations
+      paths.push(
+        '/usr/local/bin/ffmpeg',
+        '/opt/homebrew/bin/ffmpeg',
+        '/usr/bin/ffmpeg',
+        path.join(process.env.HOME || '', 'homebrew/bin/ffmpeg')
+      );
+    } else if (platform === 'linux') {
+      // Linux common locations
+      paths.push(
+        '/usr/bin/ffmpeg',
+        '/usr/local/bin/ffmpeg',
+        '/opt/ffmpeg/bin/ffmpeg'
+      );
+    } else if (platform === 'win32') {
+      // Windows common locations
+      const programFiles = process.env['ProgramFiles'] || 'C:\\Program Files';
+      const programFilesX86 = process.env['ProgramFiles(x86)'] || 'C:\\Program Files (x86)';
+      paths.push(
+        path.join(programFiles, 'ffmpeg', 'bin', 'ffmpeg.exe'),
+        path.join(programFilesX86, 'ffmpeg', 'bin', 'ffmpeg.exe'),
+        'C:\\ffmpeg\\bin\\ffmpeg.exe'
+      );
+    }
+
+    return paths;
+  }
+
+  private _getFFmpegInstallationInstructions(): string {
+    const platform = process.platform;
+    
+    let instructions = 'To install FFmpeg:\n\n';
+    
+    if (platform === 'darwin') {
+      instructions += 'macOS:\n';
+      instructions += '1. Using Homebrew: brew install ffmpeg\n';
+      instructions += '2. Or download from: https://ffmpeg.org/download.html#build-mac\n';
+      instructions += '3. Or set FFMPEG_PATH environment variable to your ffmpeg binary\n\n';
+    } else if (platform === 'linux') {
+      instructions += 'Linux:\n';
+      instructions += '1. Ubuntu/Debian: sudo apt update && sudo apt install ffmpeg\n';
+      instructions += '2. CentOS/RHEL: sudo yum install ffmpeg\n';
+      instructions += '3. Or download from: https://ffmpeg.org/download.html#build-linux\n';
+      instructions += '4. Or set FFMPEG_PATH environment variable to your ffmpeg binary\n\n';
+    } else if (platform === 'win32') {
+      instructions += 'Windows:\n';
+      instructions += '1. Download from: https://ffmpeg.org/download.html#build-windows\n';
+      instructions += '2. Extract and add to PATH, or\n';
+      instructions += '3. Set FFMPEG_PATH environment variable to your ffmpeg.exe\n\n';
+    }
+
+    instructions += 'Environment Variables:\n';
+    instructions += '- Set FFMPEG_PATH to the full path to your ffmpeg binary\n';
+    instructions += '- Example: export FFMPEG_PATH=/usr/local/bin/ffmpeg\n';
+    instructions += '- Or in your MCP configuration, add to env: { "FFMPEG_PATH": "/path/to/ffmpeg" }\n\n';
+    
+    instructions += 'MCP Configuration Example:\n';
+    instructions += '{\n';
+    instructions += '  "playwright": {\n';
+    instructions += '    "command": "node",\n';
+    instructions += '    "args": ["/path/to/playwright-mcp/cli.js", "--save-video"],\n';
+    instructions += '    "env": {\n';
+    instructions += '      "FFMPEG_PATH": "/usr/local/bin/ffmpeg"\n';
+    instructions += '    }\n';
+    instructions += '  }\n';
+    instructions += '}';
+
+    return instructions;
   }
 
   private async _downloadFFmpeg(): Promise<string> {
     const platform = process.platform;
     const arch = process.arch;
-
-    // Create cache directory
-    const cacheDir = path.join(process.cwd(), '.cache', 'ffmpeg');
+    const cacheDir = path.join(process.cwd(), '.ffmpeg-cache');
     await fs.promises.mkdir(cacheDir, { recursive: true });
 
     let ffmpegUrl: string;
@@ -233,7 +344,6 @@ export class VideoRecorder {
       // File doesn't exist or not executable, download it
     }
 
-
     const zipPath = path.join(cacheDir, `${ffmpegFilename}.zip`);
 
     // Download the zip file
@@ -246,10 +356,8 @@ export class VideoRecorder {
     if (platform !== 'win32')
       await fs.promises.chmod(ffmpegPath, 0o755);
 
-
     // Clean up zip file
     await fs.promises.unlink(zipPath);
-
 
     return ffmpegPath;
   }

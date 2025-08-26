@@ -48,11 +48,22 @@ const recordingStart = defineTool({
     if (context.videoRecorder.isRecording())
       throw new Error('Video recording is already in progress.');
 
+    try {
+      await context.videoRecorder.startRecording(context);
 
-    await context.videoRecorder.startRecording(context);
-
-    response.addCode(`// Started video recording`);
-    response.addResult(`Started video recording. Video will be saved as: ${context.videoRecorder.getVideoFile()}`);
+      response.addCode(`// Started video recording`);
+      response.addResult(`Started video recording. Video will be saved as: ${context.videoRecorder.getVideoFile()}`);
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      
+      // Provide helpful instructions if FFmpeg is not found
+      if (errorMessage.includes('FFmpeg is required') || errorMessage.includes('FFmpeg path')) {
+        response.addError(`Failed to start video recording: ${errorMessage}\n\nTo fix this:\n1. Install FFmpeg: brew install ffmpeg (macOS) or apt install ffmpeg (Linux)\n2. Or set FFMPEG_PATH environment variable in your MCP configuration\n3. Or the system will attempt to auto-download FFmpeg`);
+        return;
+      }
+      
+      response.addError(`Failed to start video recording: ${errorMessage}`);
+    }
   }
 });
 

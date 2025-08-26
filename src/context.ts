@@ -26,6 +26,7 @@ import type { Tool } from './tools/tool.js';
 import type { BrowserContextFactory, ClientInfo } from './browserContextFactory.js';
 import type * as actions from './actions.js';
 import type { SessionLog } from './sessionLog.js';
+import type { VideoRecorder } from './videoRecorder.js';
 
 const testDebug = debug('pw:mcp:test');
 
@@ -35,6 +36,7 @@ type ContextOptions = {
   browserContextFactory: BrowserContextFactory;
   sessionLog: SessionLog | undefined;
   clientInfo: ClientInfo;
+  videoRecorder?: VideoRecorder;
 };
 
 export class Context {
@@ -42,6 +44,7 @@ export class Context {
   readonly config: FullConfig;
   readonly sessionLog: SessionLog | undefined;
   readonly options: ContextOptions;
+  readonly videoRecorder?: VideoRecorder;
   private _browserContextPromise: Promise<{ browserContext: playwright.BrowserContext, close: () => Promise<void> }> | undefined;
   private _browserContextFactory: BrowserContextFactory;
   private _tabs: Tab[] = [];
@@ -58,6 +61,7 @@ export class Context {
     this.config = options.config;
     this.sessionLog = options.sessionLog;
     this.options = options;
+    this.videoRecorder = options.videoRecorder;
     this._browserContextFactory = options.browserContextFactory;
     this._clientInfo = options.clientInfo;
     testDebug('create context');
