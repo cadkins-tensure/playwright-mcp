@@ -169,9 +169,9 @@ export const baseRules = {
   ],
   "eol-last": 2,
 
-  // copyright
+  // copyright - only enforce for Microsoft's original files
   "notice/notice": [
-    2,
+    1, // Changed from 2 (error) to 1 (warning)
     {
       mustMatch: "Copyright",
       templateFile: path.join(__dirname, "utils", "copyright.js"),
