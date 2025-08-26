@@ -15,6 +15,8 @@
  */
 
 import { fileURLToPath } from 'url';
+import path from 'path';
+import os from 'os';
 import { FullConfig } from './config.js';
 import { Context } from './context.js';
 import { logUnhandledError } from './utils/log.js';
@@ -22,6 +24,7 @@ import { Response } from './response.js';
 import { SessionLog } from './sessionLog.js';
 import { filteredTools } from './tools.js';
 import { toMcpTool } from './mcp/tool.js';
+import { VideoRecorder } from './videoRecorder.js';
 
 import type { Tool } from './tools/tool.js';
 import type { BrowserContextFactory } from './browserContextFactory.js';
@@ -49,12 +52,32 @@ export class BrowserServerBackend implements ServerBackend {
       rootPath = url ? fileURLToPath(url) : undefined;
     }
     this._sessionLog = this._config.saveSession ? await SessionLog.create(this._config, rootPath) : undefined;
+    
+    // Create video recorder if video capability is enabled
+    let videoRecorder: VideoRecorder | undefined;
+    if (this._config.capabilities?.includes('video')) {
+      // Enable video recording in config
+      this._config.videoRecording = {
+        enabled: true,
+        options: {
+          format: 'webm',
+          quality: 'medium',
+          frameRate: 5,
+          fullPage: false,
+          screenshotInterval: 2000,
+        }
+      };
+      const recorder = await VideoRecorder.create(this._config, rootPath);
+      videoRecorder = recorder || undefined;
+    }
+    
     this._context = new Context({
       tools: this._tools,
       config: this._config,
       browserContextFactory: this._browserContextFactory,
       sessionLog: this._sessionLog,
       clientInfo: { ...clientVersion, rootPath },
+      videoRecorder,
     });
   }
 

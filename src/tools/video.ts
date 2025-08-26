@@ -34,8 +34,8 @@ const recordingStart = defineTool({
 
   handle: async (context, params, response) => {
 
-    if (!context.videoRecorder)
-      throw new Error('Video recording is not enabled. Use --save-video flag to enable video recording.');
+            if (!context.videoRecorder)
+            throw new Error('Video recording is not enabled. Use --caps video flag to enable video recording.');
 
 
     if (context.videoRecorder.isRecording())
