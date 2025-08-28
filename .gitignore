@@ -9,3 +9,4 @@ playwright-report/
 .env
 sessions/
 .playwright-mcp/
+videos/

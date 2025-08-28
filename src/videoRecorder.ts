@@ -85,9 +85,9 @@ export class VideoRecorder {
     if (!config.videoRecording?.enabled)
       return null;
 
-    // Create base output directory - session folders will be created in startRecording
-    const outputDir = await outputFile(config, rootPath, 'video-sessions');
-    await fs.promises.mkdir(outputDir, { recursive: true });
+    // Create videos directory in the project root
+    const videosDir = path.join(process.cwd(), 'videos');
+    await fs.promises.mkdir(videosDir, { recursive: true });
 
     const options = {
       format: 'webm' as const,
@@ -98,7 +98,7 @@ export class VideoRecorder {
       ...config.videoRecording.options,
     };
 
-    const recorder = new VideoRecorder(config, options, outputDir);
+    const recorder = new VideoRecorder(config, options, videosDir);
     return recorder;
   }
 
