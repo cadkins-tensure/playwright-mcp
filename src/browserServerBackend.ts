@@ -51,6 +51,8 @@ export class BrowserServerBackend implements ServerBackend {
       const url = firstRootUri ? new URL(firstRootUri) : undefined;
       rootPath = url ? fileURLToPath(url) : undefined;
     }
+    
+
     this._sessionLog = this._config.saveSession ? await SessionLog.create(this._config, rootPath) : undefined;
     
     // Create video recorder if video capability is enabled
