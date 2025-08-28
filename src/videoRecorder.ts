@@ -13,13 +13,13 @@ import { spawn } from 'child_process';
 import https from 'https';
 import { createWriteStream } from 'fs';
 import extract from 'extract-zip';
+import sharp from 'sharp';
 
 import * as playwright from 'playwright';
 import { logUnhandledError } from './utils/log.js';
 import { outputFile } from './config.js';
 
 import type { FullConfig } from './config.js';
-
 import type { Context } from './context.js';
 
 export interface VideoRecordingOptions {
@@ -28,6 +28,28 @@ export interface VideoRecordingOptions {
   frameRate: number;
   fullPage: boolean;
   screenshotInterval: number;
+}
+
+export interface FrameAnnotation {
+  frameNumber: number;
+  text: string;
+  position: 'top-left' | 'top-right' | 'bottom-left' | 'bottom-right' | 'center';
+  style: {
+    backgroundColor: string;
+    textColor: string;
+    fontSize: number;
+  };
+}
+
+export interface AnnotationStorage {
+  sessionId: string;
+  startTime: number;
+  frameAnnotations: Record<number, FrameAnnotation[]>;
+  metadata: {
+    totalFrames: number;
+    recordingDuration: number;
+    annotationCount: number;
+  };
 }
 
 export class VideoRecorder {
@@ -43,6 +65,12 @@ export class VideoRecorder {
   private _ffmpegPath: string | null = null;
   private _sessionId: string | null = null;
   private static _sessionCounter = 0;
+  
+  // Annotation properties
+  private _frameAnnotations: Map<number, FrameAnnotation[]> = new Map();
+  private _currentFrameNumber: number = 0;
+  private _startTime: number = 0;
+  private _annotationFile: string = '';
 
   constructor(config: FullConfig, options: VideoRecordingOptions, outputDir: string) {
     this._config = config;
@@ -89,6 +117,12 @@ export class VideoRecorder {
     this._videoFile = path.join(sessionDir, `recording-${this._sessionId}.${this._options.format}`);
 
     await fs.promises.mkdir(this._screenshotsDir, { recursive: true });
+
+    // Initialize annotation system
+    this._annotationFile = path.join(sessionDir, 'annotations.json');
+    this._startTime = Date.now();
+    this._currentFrameNumber = 0;
+    this._frameAnnotations.clear();
 
     this._context = context;
     this._isRecording = true;
@@ -420,21 +454,17 @@ export class VideoRecorder {
   }
 
   private async _captureScreenshot(): Promise<void> {
-
     if (!this._context || !this._isRecording)
       return;
-
 
     try {
       const currentTab = this._context.currentTab();
       if (!currentTab)
         return;
 
-
       const screenshotCount = ++this._screenshotCount;
       const filename = `screenshot-${screenshotCount.toString().padStart(6, '0')}.png`;
       const filepath = path.join(this._screenshotsDir, filename);
-
 
       // Check if page is still valid
       if (currentTab.page.isClosed()) {
@@ -442,19 +472,29 @@ export class VideoRecorder {
         return;
       }
 
-
-      const options: playwright.PageScreenshotOptions = {
+      // Capture screenshot to buffer first
+      const screenshot = await currentTab.page.screenshot({
         type: 'png',
-        path: filepath,
         fullPage: this._options.fullPage,
-      };
+      });
 
-      await currentTab.page.screenshot(options);
+      // Get annotations for current frame
+      const frameAnnotations = this._frameAnnotations.get(this._currentFrameNumber) || [];
+      
+      // Add annotations to the screenshot
+      const annotatedScreenshot = await this._addAnnotationsToImage(screenshot, frameAnnotations);
+      
+      // Save annotated screenshot
+      await fs.promises.writeFile(filepath, annotatedScreenshot);
+
+      // Increment frame counter
+      this._currentFrameNumber++;
 
       // Verify the file was actually created
       try {
         await fs.promises.stat(filepath);
       } catch (statError) {
+        // File creation failed
       }
     } catch (error) {
       logUnhandledError(error);
@@ -559,5 +599,131 @@ export class VideoRecorder {
 
   getVideoFile(): string {
     return this._videoFile;
+  }
+
+  // Annotation methods
+  getCurrentFrameInfo(): { frameNumber: number; elapsedTime: number } {
+    return {
+      frameNumber: this._currentFrameNumber,
+      elapsedTime: Math.round((Date.now() - this._startTime) / 1000)
+    };
+  }
+
+  async addFrameAnnotation(params: {
+    frameNumber: number;
+    text: string;
+    position?: string;
+    style?: any;
+  }): Promise<void> {
+    const annotation: FrameAnnotation = {
+      frameNumber: params.frameNumber,
+      text: params.text,
+      position: (params.position as any) || 'bottom-right',
+      style: params.style || { 
+        backgroundColor: 'rgba(0,0,0,0.7)', 
+        textColor: 'white', 
+        fontSize: 14 
+      }
+    };
+    
+    if (!this._frameAnnotations.has(params.frameNumber)) {
+      this._frameAnnotations.set(params.frameNumber, []);
+    }
+    this._frameAnnotations.get(params.frameNumber)!.push(annotation);
+    
+    // Save annotations after each addition
+    await this._saveAnnotations();
+  }
+
+  private async _saveAnnotations(): Promise<void> {
+    if (!this._annotationFile) return;
+    
+    const annotationData: AnnotationStorage = {
+      sessionId: this._sessionId!,
+      startTime: this._startTime,
+      frameAnnotations: Object.fromEntries(this._frameAnnotations),
+      metadata: {
+        totalFrames: this._currentFrameNumber,
+        recordingDuration: Date.now() - this._startTime,
+        annotationCount: Array.from(this._frameAnnotations.values()).flat().length
+      }
+    };
+    
+    await fs.promises.writeFile(this._annotationFile, JSON.stringify(annotationData, null, 2));
+  }
+
+  private async _loadAnnotations(): Promise<AnnotationStorage | null> {
+    if (!this._annotationFile) return null;
+    
+    try {
+      const annotationData = await fs.promises.readFile(this._annotationFile, 'utf8');
+      return JSON.parse(annotationData);
+    } catch (error) {
+      return null;
+    }
+  }
+
+  private async _addAnnotationsToImage(screenshot: Buffer, annotations: FrameAnnotation[]): Promise<Buffer> {
+    let image = sharp(screenshot);
+    
+    // Add frame number and timestamp
+    const timestamp = new Date().toLocaleTimeString();
+    const frameText = `Frame ${this._currentFrameNumber} - ${timestamp}`;
+    
+    const frameTextSvg = `<svg><text x="10" y="30" font-family="Arial" font-size="16" fill="white" stroke="black" stroke-width="2">${frameText}</text></svg>`;
+    
+    image = image.composite([{
+      input: Buffer.from(frameTextSvg),
+      top: 10,
+      left: 10
+    }]);
+    
+    // Add annotations
+    for (const annotation of annotations) {
+      const annotationSvg = this._createAnnotationSVG(annotation);
+      const position = this._getAnnotationPosition(annotation.position);
+      
+      image = image.composite([{
+        input: Buffer.from(annotationSvg),
+        top: position.top,
+        left: position.left
+      }]);
+    }
+    
+    return image.toBuffer();
+  }
+
+  private _createAnnotationSVG(annotation: FrameAnnotation): string {
+    const { text, style } = annotation;
+    const padding = 8;
+    const lineHeight = style.fontSize + 4;
+    const lines = text.split('\n');
+    const textHeight = lines.length * lineHeight;
+    const textWidth = Math.max(...lines.map(line => line.length * style.fontSize * 0.6));
+    
+    const width = textWidth + padding * 2;
+    const height = textHeight + padding * 2;
+    
+    const textElements = lines.map((line, index) => 
+      `<text x="${padding}" y="${padding + style.fontSize + (index * lineHeight)}" font-family="Arial" font-size="${style.fontSize}" fill="${style.textColor}">${line}</text>`
+    ).join('');
+    
+    return `<svg width="${width}" height="${height}">
+      <rect width="${width}" height="${height}" fill="${style.backgroundColor}" rx="4"/>
+      ${textElements}
+    </svg>`;
+  }
+
+  private _getAnnotationPosition(position: string): { top: number; left: number } {
+    // These would need to be calculated based on actual image dimensions
+    // For now, using fixed positions
+    switch (position) {
+      case 'top-left': return { top: 50, left: 10 };
+      case 'top-right': return { top: 50, left: 800 };
+      case 'bottom-left': return { top: 500, left: 10 };
+      case 'bottom-right': return { top: 500, left: 800 };
+      case 'center': return { top: 250, left: 400 };
+      default: return { top: 500, left: 800 };
+    }
   }
 }

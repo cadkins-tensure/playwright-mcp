@@ -22,6 +22,19 @@ const recordingStopSchema = z.object({});
 
 const recordingPauseSchema = z.object({});
 
+const recordingGetFrameInfoSchema = z.object({});
+
+const recordingAnnotateFrameSchema = z.object({
+  frameNumber: z.number().describe('Frame number to annotate (0-based)'),
+  text: z.string().describe('Annotation text to display'),
+  position: z.enum(['top-left', 'top-right', 'bottom-left', 'bottom-right', 'center']).optional().describe('Position of annotation'),
+  style: z.object({
+    backgroundColor: z.string().optional(),
+    textColor: z.string().optional(),
+    fontSize: z.number().optional(),
+  }).optional(),
+});
+
 const recordingStart = defineTool({
   capability: 'video',
   schema: {
@@ -121,8 +134,51 @@ const recordingPause = defineTool({
   }
 });
 
+const recordingGetFrameInfo = defineTool({
+  capability: 'video',
+  schema: {
+    name: 'recording_get_frame_info',
+    title: 'Get current frame information',
+    description: 'Get information about the current video recording frame',
+    inputSchema: recordingGetFrameInfoSchema,
+    type: 'readOnly',
+  },
+  handle: async (context, params, response) => {
+    if (!context.videoRecorder?.isRecording()) {
+      response.addError('No active video recording');
+      return;
+    }
+    
+    const frameInfo = context.videoRecorder.getCurrentFrameInfo();
+    response.addResult(`Current frame: ${frameInfo.frameNumber} (${frameInfo.elapsedTime}s)`);
+    response.addCode(`// Frame ${frameInfo.frameNumber} - ${frameInfo.elapsedTime}s into recording`);
+  }
+});
+
+const recordingAnnotateFrame = defineTool({
+  capability: 'video',
+  schema: {
+    name: 'recording_annotate_frame',
+    title: 'Add annotation to specific frame',
+    description: 'Add a text annotation to a specific frame number',
+    inputSchema: recordingAnnotateFrameSchema,
+    type: 'readOnly',
+  },
+  handle: async (context, params, response) => {
+    if (!context.videoRecorder?.isRecording()) {
+      response.addError('No active video recording');
+      return;
+    }
+    
+    await context.videoRecorder.addFrameAnnotation(params);
+    response.addResult(`Added annotation to frame ${params.frameNumber}: "${params.text}"`);
+  }
+});
+
 export default [
   recordingStart,
   recordingStop,
   recordingPause,
+  recordingGetFrameInfo,
+  recordingAnnotateFrame,
 ];
