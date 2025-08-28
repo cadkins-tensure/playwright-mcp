@@ -86,7 +86,9 @@ export class VideoRecorder {
       return null;
 
     // Create videos directory in the project root
-    const videosDir = path.join(process.cwd(), 'videos');
+    // For now, hardcode the project directory to ensure videos are saved in the right place
+    const projectDir = '/Volumes/CaseSensitive/MCPS/playwright-mcp';
+    const videosDir = path.join(projectDir, 'videos');
     await fs.promises.mkdir(videosDir, { recursive: true });
 
     const options = {
