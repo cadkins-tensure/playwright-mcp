@@ -498,6 +498,8 @@ export class VideoRecorder {
       // Get annotations for current frame
       const frameAnnotations = this._frameAnnotations.get(this._currentFrameNumber) || [];
       
+      console.log(`[DEBUG] Capturing screenshot for frame ${this._currentFrameNumber}, found ${frameAnnotations.length} annotations`);
+      
       // Add annotations to the screenshot
       const annotatedScreenshot = await this._addAnnotationsToImage(screenshot, frameAnnotations);
       
@@ -626,6 +628,10 @@ export class VideoRecorder {
     };
   }
 
+  getCurrentFrameNumber(): number {
+    return this._currentFrameNumber;
+  }
+
   async addFrameAnnotation(params: {
     frameNumber: number;
     text: string;
@@ -681,33 +687,74 @@ export class VideoRecorder {
   }
 
   private async _addAnnotationsToImage(screenshot: Buffer, annotations: FrameAnnotation[]): Promise<Buffer> {
-    let image = sharp(screenshot);
-    
-    // Add frame number and timestamp
-    const timestamp = new Date().toLocaleTimeString();
-    const frameText = `Frame ${this._currentFrameNumber} - ${timestamp}`;
-    
-    const frameTextSvg = `<svg><text x="10" y="30" font-family="Arial" font-size="16" fill="white" stroke="black" stroke-width="2">${frameText}</text></svg>`;
-    
-    image = image.composite([{
-      input: Buffer.from(frameTextSvg),
-      top: 10,
-      left: 10
-    }]);
-    
-    // Add annotations
-    for (const annotation of annotations) {
-      const annotationSvg = this._createAnnotationSVG(annotation);
-      const position = this._getAnnotationPosition(annotation.position);
+    try {
+      console.log(`[DEBUG] Adding annotations to frame ${this._currentFrameNumber}, ${annotations.length} annotations`);
       
-      image = image.composite([{
-        input: Buffer.from(annotationSvg),
-        top: position.top,
-        left: position.left
-      }]);
+      // If no annotations, just return the original screenshot
+      if (annotations.length === 0) {
+        console.log(`[DEBUG] No annotations to add, returning original screenshot`);
+        return screenshot;
+      }
+      
+      let image = sharp(screenshot);
+      
+      // Get image metadata for proper positioning
+      const metadata = await image.metadata();
+      const imageWidth = metadata.width || 1920;
+      const imageHeight = metadata.height || 1080;
+      
+      console.log(`[DEBUG] Image dimensions: ${imageWidth}x${imageHeight}`);
+      
+      // Add frame number and timestamp
+      const timestamp = new Date().toLocaleTimeString();
+      const frameText = `Frame ${this._currentFrameNumber} - ${timestamp}`;
+      
+      const frameTextSvg = `<svg width="400" height="40" xmlns="http://www.w3.org/2000/svg">
+        <rect width="400" height="40" fill="rgba(0,0,0,0.7)" rx="4"/>
+        <text x="10" y="25" font-family="Arial, sans-serif" font-size="16" fill="white">${frameText}</text>
+      </svg>`;
+      console.log(`[DEBUG] Adding frame text: ${frameText}`);
+      
+      try {
+        image = image.composite([{
+          input: Buffer.from(frameTextSvg),
+          top: 10,
+          left: 10
+        }]);
+        console.log(`[DEBUG] Frame text composite successful`);
+      } catch (compositeError) {
+        console.error(`[ERROR] Frame text composite failed:`, compositeError);
+      }
+      
+      // Add annotations
+      for (const annotation of annotations) {
+        console.log(`[DEBUG] Adding annotation: ${annotation.text} at position ${annotation.position}`);
+        try {
+          const annotationSvg = this._createAnnotationSVG(annotation);
+          console.log(`[DEBUG] Created SVG for annotation:`, annotationSvg.substring(0, 100) + '...');
+          
+          const position = this._getAnnotationPosition(annotation.position, imageWidth, imageHeight);
+          console.log(`[DEBUG] Annotation position: top=${position.top}, left=${position.left}`);
+          
+          image = image.composite([{
+            input: Buffer.from(annotationSvg),
+            top: position.top,
+            left: position.left
+          }]);
+          console.log(`[DEBUG] Annotation composite successful`);
+        } catch (annotationError) {
+          console.error(`[ERROR] Annotation composite failed:`, annotationError);
+        }
+      }
+      
+      const result = await image.toBuffer();
+      console.log(`[DEBUG] Successfully created annotated image with ${annotations.length} annotations, size: ${result.length}`);
+      return result;
+    } catch (error) {
+      console.error(`[ERROR] Failed to add annotations to image:`, error);
+      // Return original screenshot if annotation fails
+      return screenshot;
     }
-    
-    return image.toBuffer();
   }
 
   private _createAnnotationSVG(annotation: FrameAnnotation): string {
@@ -716,31 +763,44 @@ export class VideoRecorder {
     const lineHeight = style.fontSize + 4;
     const lines = text.split('\n');
     const textHeight = lines.length * lineHeight;
-    const textWidth = Math.max(...lines.map(line => line.length * style.fontSize * 0.6));
     
-    const width = textWidth + padding * 2;
+    // Limit width to reasonable size to avoid Sharp compositing errors
+    const estimatedTextWidth = Math.max(...lines.map(line => line.length * style.fontSize * 0.6));
+    const maxWidth = 400; // Maximum annotation width
+    const width = Math.min(estimatedTextWidth + padding * 2, maxWidth);
     const height = textHeight + padding * 2;
     
     const textElements = lines.map((line, index) => 
-      `<text x="${padding}" y="${padding + style.fontSize + (index * lineHeight)}" font-family="Arial" font-size="${style.fontSize}" fill="${style.textColor}">${line}</text>`
+      `<text x="${padding}" y="${padding + style.fontSize + (index * lineHeight)}" font-family="Arial, sans-serif" font-size="${style.fontSize}" fill="${style.textColor}">${line}</text>`
     ).join('');
     
-    return `<svg width="${width}" height="${height}">
+    return `<svg width="${width}" height="${height}" xmlns="http://www.w3.org/2000/svg">
       <rect width="${width}" height="${height}" fill="${style.backgroundColor}" rx="4"/>
       ${textElements}
     </svg>`;
   }
 
-  private _getAnnotationPosition(position: string): { top: number; left: number } {
-    // These would need to be calculated based on actual image dimensions
-    // For now, using fixed positions
+  private _getAnnotationPosition(position: string, imageWidth: number, imageHeight: number): { top: number; left: number } {
+    // Calculate positions based on actual image dimensions, ensuring annotations stay within bounds
+    const maxAnnotationWidth = 400;
+    const annotationHeight = 80; // Estimated max annotation height
+    
     switch (position) {
       case 'top-left': return { top: 50, left: 10 };
-      case 'top-right': return { top: 50, left: 800 };
-      case 'bottom-left': return { top: 500, left: 10 };
-      case 'bottom-right': return { top: 500, left: 800 };
-      case 'center': return { top: 250, left: 400 };
-      default: return { top: 500, left: 800 };
+      case 'top-right': return { top: 50, left: Math.max(10, imageWidth - maxAnnotationWidth - 10) };
+      case 'bottom-left': return { top: Math.max(60, imageHeight - annotationHeight - 10), left: 10 };
+      case 'bottom-right': return { 
+        top: Math.max(60, imageHeight - annotationHeight - 10), 
+        left: Math.max(10, imageWidth - maxAnnotationWidth - 10) 
+      };
+      case 'center': return { 
+        top: Math.max(60, imageHeight / 2 - annotationHeight / 2), 
+        left: Math.max(10, imageWidth / 2 - maxAnnotationWidth / 2) 
+      };
+      default: return { 
+        top: Math.max(60, imageHeight - annotationHeight - 10), 
+        left: Math.max(10, imageWidth - maxAnnotationWidth - 10) 
+      };
     }
   }
 }

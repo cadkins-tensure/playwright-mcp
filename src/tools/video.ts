@@ -143,16 +143,19 @@ const recordingGetFrameInfo = defineTool({
     inputSchema: recordingGetFrameInfoSchema,
     type: 'readOnly',
   },
-  handle: async (context, params, response) => {
-    if (!context.videoRecorder?.isRecording()) {
-      response.addError('No active video recording');
-      return;
-    }
-    
-    const frameInfo = context.videoRecorder.getCurrentFrameInfo();
-    response.addResult(`Current frame: ${frameInfo.frameNumber} (${frameInfo.elapsedTime}s)`);
-    response.addCode(`// Frame ${frameInfo.frameNumber} - ${frameInfo.elapsedTime}s into recording`);
-  }
+            handle: async (context, params, response) => {
+            if (!context.videoRecorder?.isRecording()) {
+              response.addError('No active video recording');
+              return;
+            }
+            
+            const frameInfo = context.videoRecorder.getCurrentFrameInfo();
+            response.addResult(`Current frame: ${frameInfo.frameNumber} (${frameInfo.elapsedTime}s)`);
+            response.addCode(`// Frame ${frameInfo.frameNumber} - ${frameInfo.elapsedTime}s into recording`);
+            
+            // Also log the current frame number for debugging
+            console.log(`[DEBUG] Current frame number: ${frameInfo.frameNumber}`);
+          }
 });
 
 const recordingAnnotateFrame = defineTool({
