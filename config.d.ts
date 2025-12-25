@@ -16,7 +16,7 @@
 
 import type * as playwright from 'playwright';
 
-export type ToolCapability = 'core' | 'core-tabs' | 'core-install' | 'vision' | 'pdf' | 'verify';
+export type ToolCapability = 'core' | 'core-tabs' | 'core-install' | 'vision' | 'pdf' | 'verify' | 'video';
 
 export type Config = {
   /**
@@ -116,4 +116,44 @@ export type Config = {
    * Whether to send image responses to the client. Can be "allow", "omit", or "auto". Defaults to "auto", which sends images if the client can display them.
    */
   imageResponses?: 'allow' | 'omit';
+
+  /**
+   * Video recording configuration.
+   */
+  videoRecording?: {
+    /**
+     * Whether video recording is enabled.
+     */
+    enabled?: boolean;
+
+    /**
+     * Video recording options.
+     */
+    options?: {
+      /**
+       * Video format. Defaults to 'webm'.
+       */
+      format?: 'webm' | 'mp4';
+
+      /**
+       * Video quality. Defaults to 'medium'.
+       */
+      quality?: 'low' | 'medium' | 'high';
+
+      /**
+       * Frame rate (fps). Defaults to 5.
+       */
+      frameRate?: number;
+
+      /**
+       * Record full page instead of just viewport. Defaults to false.
+       */
+      fullPage?: boolean;
+
+      /**
+       * Screenshot interval in milliseconds. Defaults to 2000.
+       */
+      screenshotInterval?: number;
+    };
+  };
 };
